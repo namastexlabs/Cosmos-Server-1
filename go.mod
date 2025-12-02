@@ -5,6 +5,7 @@ go 1.23
 toolchain go1.23.2
 
 require (
+	github.com/Telmate/proxmox-api-go v0.0.0-20240829200428-0f498e06d13d
 	github.com/256dpi/lungo v0.3.7
 	github.com/Masterminds/semver v1.5.0
 	github.com/analogj/scrutiny v0.8.0
