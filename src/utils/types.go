@@ -85,7 +85,9 @@ type Config struct {
 	NewInstall bool `validate:"boolean"`
 	HTTPConfig HTTPConfig `validate:"required"`
 	EmailConfig EmailConfig `validate:"required"`
+	RuntimeType string // "docker" or "proxmox" - defaults to docker
 	DockerConfig DockerConfig
+	ProxmoxConfig ProxmoxConfig
 	BlockedCountries []string
 	CountryBlacklistIsWhitelist bool
 	ServerCountry string
@@ -210,6 +212,18 @@ type DockerConfig struct {
 	SkipPruneNetwork bool
 	SkipPruneImages bool
 	DefaultDataPath string
+}
+
+// ProxmoxConfig for Proxmox LXC runtime
+type ProxmoxConfig struct {
+	Host          string // proxmox.local:8006
+	Node          string // pve
+	TokenID       string // user@realm!tokenid
+	TokenSecret   string
+	Storage       string // local-lvm
+	VMIDStart     int    // Starting VMID for containers
+	VMIDEnd       int    // Ending VMID range
+	SkipTLSVerify bool
 }
 
 type ProxyConfig struct {

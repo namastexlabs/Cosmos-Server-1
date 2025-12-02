@@ -36,6 +36,15 @@ type NewInstallJSON struct {
 	DNSChallengeProvider string `json:"dnsChallengeProvider",validate:"omitempty"`
 	DNSChallengeConfig map[string]string
 	AllowHTTPLocalIPAccess bool `json:"allowHTTPLocalIPAccess",validate:"omitempty"`
+	// Runtime selection (docker or proxmox)
+	RuntimeType string `json:"runtimeType,omitempty"`
+	// Proxmox configuration (only used when RuntimeType is "proxmox")
+	ProxmoxHost string `json:"proxmoxHost,omitempty"`
+	ProxmoxNode string `json:"proxmoxNode,omitempty"`
+	ProxmoxTokenID string `json:"proxmoxTokenID,omitempty"`
+	ProxmoxTokenSecret string `json:"proxmoxTokenSecret,omitempty"`
+	ProxmoxStorage string `json:"proxmoxStorage,omitempty"`
+	ProxmoxSkipTLSVerify bool `json:"proxmoxSkipTLSVerify,omitempty"`
 }
 
 type AdminJSON struct {
@@ -83,6 +92,38 @@ func NewInstallRoute(w http.ResponseWriter, req *http.Request) {
 			}
 			utils.DisconnectDB()
 			LoadConfig()
+		}
+		if(request.Step == "1") {
+			// Runtime selection (Docker or Proxmox)
+			utils.Log("NewInstall: Step Runtime Selection")
+
+			// Default to docker if not specified
+			runtimeType := request.RuntimeType
+			if runtimeType == "" {
+				runtimeType = "docker"
+			}
+
+			newConfig.RuntimeType = runtimeType
+
+			// Configure Proxmox if selected
+			if runtimeType == "proxmox" {
+				newConfig.ProxmoxConfig = utils.ProxmoxConfig{
+					Host:          request.ProxmoxHost,
+					Node:          request.ProxmoxNode,
+					TokenID:       request.ProxmoxTokenID,
+					TokenSecret:   request.ProxmoxTokenSecret,
+					Storage:       request.ProxmoxStorage,
+					VMIDStart:     100,  // Default starting VMID
+					VMIDEnd:       999,  // Default ending VMID
+					SkipTLSVerify: request.ProxmoxSkipTLSVerify,
+				}
+				utils.Log("NewInstall: Configured Proxmox runtime - Host: " + request.ProxmoxHost)
+			} else {
+				utils.Log("NewInstall: Using Docker runtime")
+			}
+
+			utils.SaveConfigTofile(newConfig)
+			utils.LoadBaseMainConfig(newConfig)
 		}
 		if(request.Step == "2") {
 			utils.Log("NewInstall: Step Database")
