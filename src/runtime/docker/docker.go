@@ -387,6 +387,12 @@ func (d *DockerRuntime) Inspect(id string) (*types.ContainerDetails, error) {
 		}
 	}
 
+	// Parse created time from string
+	var createdUnix int64
+	if createdTime, err := time.Parse(time.RFC3339Nano, info.Created); err == nil {
+		createdUnix = createdTime.Unix()
+	}
+
 	return &types.ContainerDetails{
 		Container: types.Container{
 			ID:       info.ID,
@@ -394,7 +400,7 @@ func (d *DockerRuntime) Inspect(id string) (*types.ContainerDetails, error) {
 			Image:    info.Config.Image,
 			State:    types.ContainerState(info.State.Status),
 			Status:   info.State.Status,
-			Created:  info.Created.Unix(),
+			Created:  createdUnix,
 			Labels:   info.Config.Labels,
 			Ports:    ports,
 			Networks: networks,
