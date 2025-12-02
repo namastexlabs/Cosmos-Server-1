@@ -2,10 +2,15 @@ name: Build and Release Cosmos
 
 on:
   push:
-    branches: [main, feature/proxmox-lxc-runtime]
+    branches: [master, feature/proxmox-lxc-runtime]
     tags: ['v*']
   pull_request:
-    branches: [main]
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      version_override:
+        description: 'Override version (e.g., 0.19.1-genieos.1)'
+        required: false
 
 env:
   GO_VERSION: '1.23.2'
@@ -13,7 +18,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
 
     steps:
     - name: Checkout code
@@ -28,11 +33,15 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: ${{ env.NODE_VERSION }}
-        cache: 'npm'
 
-    - name: Get version from package.json
+    - name: Get version
       id: version
-      run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+      run: |
+        if [ -n "${{ github.event.inputs.version_override }}" ]; then
+          echo "VERSION=${{ github.event.inputs.version_override }}" >> $GITHUB_OUTPUT
+        else
+          echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+        fi
 
     - name: Install frontend dependencies
       run: npm ci
@@ -53,77 +62,60 @@ jobs:
         CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o build/cosmos-arm64 ./src/*.go
         CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o build/cosmos-launcher-arm64 ./src/launcher/launcher.go ./src/launcher/update.go
 
-    - name: Copy assets
+    - name: Copy assets and package
       run: |
         chmod +x build/cosmos build/cosmos-arm64 build/cosmos-launcher build/cosmos-launcher-arm64
-        cp start.sh build/
-        chmod +x build/start.sh
-        cp restic restic-arm build/ 2>/dev/null || echo "Restic binaries not found, skipping"
-        chmod +x build/restic build/restic-arm 2>/dev/null || true
+        cp start.sh build/ 2>/dev/null || true
         cp -r static build/
-        cp GeoLite2-Country.mmdb build/ 2>/dev/null || echo "GeoLite2 not found, skipping"
-        cp nebula nebula-arm nebula-cert nebula-arm-cert build/ 2>/dev/null || echo "Nebula binaries not found, skipping"
-        cp Logo.png build/ 2>/dev/null || true
+        cp GeoLite2-Country.mmdb build/ 2>/dev/null || true
+        cp restic restic-arm nebula nebula-arm nebula-cert nebula-arm-cert Logo.png build/ 2>/dev/null || true
         mkdir -p build/images
         cp client/src/assets/images/icons/cosmos_gray.png build/cosmos_gray.png 2>/dev/null || true
 
-    - name: Create meta.json
-      run: |
-        echo '{' > build/meta.json
-        echo '  "version": "${{ steps.version.outputs.VERSION }}",' >> build/meta.json
-        echo '  "buildDate": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",' >> build/meta.json
-        echo '  "builtFrom": "github-actions",' >> build/meta.json
-        echo '  "commit": "${{ github.sha }}"' >> build/meta.json
-        echo '}' >> build/meta.json
+        # Create meta.json
+        cat > build/meta.json << EOF
+        {
+          "version": "${{ steps.version.outputs.VERSION }}",
+          "buildDate": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "commit": "${{ github.sha }}"
+        }
+        EOF
 
-    - name: Package AMD64 release
-      run: |
+        # Package AMD64
         cd build
         zip -r ../cosmos-genieos-${{ steps.version.outputs.VERSION }}-amd64.zip \
-          cosmos cosmos-launcher static/ start.sh meta.json \
-          restic GeoLite2-Country.mmdb nebula nebula-cert Logo.png cosmos_gray.png 2>/dev/null || \
-        zip -r ../cosmos-genieos-${{ steps.version.outputs.VERSION }}-amd64.zip \
-          cosmos cosmos-launcher static/ start.sh meta.json
+          cosmos cosmos-launcher static/ meta.json 2>/dev/null || true
 
-    - name: Package ARM64 release
-      run: |
-        cd build
+        # Package ARM64
         zip -r ../cosmos-genieos-${{ steps.version.outputs.VERSION }}-arm64.zip \
-          cosmos-arm64 cosmos-launcher-arm64 static/ start.sh meta.json \
-          restic-arm GeoLite2-Country.mmdb nebula-arm nebula-arm-cert Logo.png cosmos_gray.png 2>/dev/null || \
-        zip -r ../cosmos-genieos-${{ steps.version.outputs.VERSION }}-arm64.zip \
-          cosmos-arm64 cosmos-launcher-arm64 static/ start.sh meta.json
+          cosmos-arm64 cosmos-launcher-arm64 static/ meta.json 2>/dev/null || true
 
-    - name: Generate checksums
-      run: |
-        md5sum cosmos-genieos-*.zip > checksums.md5
+        cd ..
         sha256sum cosmos-genieos-*.zip > checksums.sha256
 
-    - name: Upload build artifacts
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: cosmos-binaries-${{ steps.version.outputs.VERSION }}
         path: |
           cosmos-genieos-*.zip
-          checksums.md5
           checksums.sha256
 
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: write
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-    - name: Get version from package.json
+    - name: Get version
       id: version
       run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
-    - name: Download build artifacts
+    - name: Download artifacts
       uses: actions/download-artifact@v4
       with:
         name: cosmos-binaries-${{ steps.version.outputs.VERSION }}
@@ -134,7 +126,6 @@ jobs:
       with:
         files: |
           ./release/cosmos-genieos-*.zip
-          ./release/checksums.md5
           ./release/checksums.sha256
         generate_release_notes: true
         body: |
@@ -151,3 +142,19 @@ jobs:
           curl -L https://github.com/namastexlabs/Cosmos-Server-1/releases/download/${{ github.ref_name }}/cosmos-genieos-${{ steps.version.outputs.VERSION }}-amd64.zip -o cosmos.zip
           unzip cosmos.zip -d /opt/cosmos/
           ```
+
+  deploy:
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v') && contains(github.ref, 'genieos')
+    runs-on: [self-hosted, Linux, X64]
+
+    steps:
+    - name: Trigger Jenkins deployment
+      run: |
+        curl -sf -X POST "http://10.114.1.103:8080/generic-webhook-trigger/invoke?token=genieos-cosmos" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "action": "deploy",
+            "tag": "${{ github.ref_name }}",
+            "repository": "Cosmos-Server-1"
+          }' || echo "Jenkins webhook failed (non-critical)"
