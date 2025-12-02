@@ -1,0 +1,99 @@
+// Jenkins Pipeline for genieos1-cosmos deployment
+// Triggered by GitHub webhook on new releases
+// Only deploys stable releases (no -rc or -unstable)
+
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'tag', defaultValue: '', description: 'Release tag (e.g., v0.19.0)')
+        string(name: 'repository', defaultValue: 'genieos1-cosmos', description: 'Repository name')
+        string(name: 'action', defaultValue: 'deploy', description: 'Action type')
+    }
+
+    environment {
+        DEPLOY_HOST = 'genieos1'
+        DEPLOY_PORT = '8022'
+        DEPLOY_USER = 'root'
+        DEPLOY_SCRIPT = '/opt/genieos1-cosmos/scripts/deploy.sh'
+    }
+
+    stages {
+        stage('Validate') {
+            steps {
+                script {
+                    echo "Received webhook: action=${params.action}, tag=${params.tag}, repo=${params.repository}"
+
+                    if (params.action != 'deploy') {
+                        echo "Skipping: action is not 'deploy'"
+                        currentBuild.result = 'NOT_BUILT'
+                        return
+                    }
+
+                    if (params.repository != 'genieos1-cosmos') {
+                        echo "Skipping: repository mismatch"
+                        currentBuild.result = 'NOT_BUILT'
+                        return
+                    }
+
+                    if (!params.tag?.startsWith('v')) {
+                        error "Invalid tag format: ${params.tag}"
+                    }
+
+                    // Only deploy stable releases
+                    if (params.tag =~ /-(rc|unstable)/) {
+                        echo "Skipping non-stable release: ${params.tag}"
+                        echo "RC and unstable releases require manual deployment"
+                        currentBuild.result = 'NOT_BUILT'
+                        return
+                    }
+
+                    echo "Deploying stable release: ${params.tag}"
+                }
+            }
+        }
+
+        stage('Deploy') {
+            when {
+                expression {
+                    params.action == 'deploy' &&
+                    params.repository == 'genieos1-cosmos' &&
+                    !(params.tag =~ /-(rc|unstable)/)
+                }
+            }
+            steps {
+                echo "Deploying ${params.tag} to ${DEPLOY_HOST}..."
+                sh """
+                    ssh -p ${DEPLOY_PORT} -o StrictHostKeyChecking=no ${DEPLOY_USER}@${DEPLOY_HOST} '${DEPLOY_SCRIPT} ${params.tag}'
+                """
+            }
+        }
+
+        stage('Health Check') {
+            when {
+                expression {
+                    params.action == 'deploy' &&
+                    params.repository == 'genieos1-cosmos' &&
+                    !(params.tag =~ /-(rc|unstable)/)
+                }
+            }
+            steps {
+                echo "Verifying deployment..."
+                sleep 10
+                sh """
+                    ssh -p ${DEPLOY_PORT} -o StrictHostKeyChecking=no ${DEPLOY_USER}@${DEPLOY_HOST} 'systemctl is-active genieos1-cosmos && cat /opt/genieos1-cosmos/meta.json'
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Deployment of ${params.tag} completed successfully!"
+        }
+        failure {
+            echo "Deployment failed - systemd will attempt self-healing"
+            // Could add Slack/Discord notification here
+        }
+    }
+}

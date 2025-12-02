@@ -1,0 +1,20 @@
+[Unit]
+Description=GenieOS Cosmos Server
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/genieos1-cosmos
+ExecStart=/opt/genieos1-cosmos/bin/cosmos
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+StandardOutput=append:/opt/genieos1-cosmos/logs/cosmos.log
+StandardError=append:/opt/genieos1-cosmos/logs/cosmos-error.log
+Environment=COSMOS_CONFIG=/opt/genieos1-cosmos/data
+
+[Install]
+WantedBy=multi-user.target
