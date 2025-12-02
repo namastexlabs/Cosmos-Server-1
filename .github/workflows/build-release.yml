@@ -1,0 +1,153 @@
+name: Build and Release Cosmos
+
+on:
+  push:
+    branches: [main, feature/proxmox-lxc-runtime]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+env:
+  GO_VERSION: '1.23.2'
+  NODE_VERSION: '18'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+
+    - name: Get version from package.json
+      id: version
+      run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+    - name: Install frontend dependencies
+      run: npm ci
+
+    - name: Build frontend
+      run: npm run client-build
+
+    - name: Copy update.go to launcher
+      run: cp src/update.go src/launcher/update.go
+
+    - name: Build Go binaries (AMD64)
+      run: |
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o build/cosmos ./src/*.go
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o build/cosmos-launcher ./src/launcher/launcher.go ./src/launcher/update.go
+
+    - name: Build Go binaries (ARM64)
+      run: |
+        CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o build/cosmos-arm64 ./src/*.go
+        CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o build/cosmos-launcher-arm64 ./src/launcher/launcher.go ./src/launcher/update.go
+
+    - name: Copy assets
+      run: |
+        chmod +x build/cosmos build/cosmos-arm64 build/cosmos-launcher build/cosmos-launcher-arm64
+        cp start.sh build/
+        chmod +x build/start.sh
+        cp restic restic-arm build/ 2>/dev/null || echo "Restic binaries not found, skipping"
+        chmod +x build/restic build/restic-arm 2>/dev/null || true
+        cp -r static build/
+        cp GeoLite2-Country.mmdb build/ 2>/dev/null || echo "GeoLite2 not found, skipping"
+        cp nebula nebula-arm nebula-cert nebula-arm-cert build/ 2>/dev/null || echo "Nebula binaries not found, skipping"
+        cp Logo.png build/ 2>/dev/null || true
+        mkdir -p build/images
+        cp client/src/assets/images/icons/cosmos_gray.png build/cosmos_gray.png 2>/dev/null || true
+
+    - name: Create meta.json
+      run: |
+        echo '{' > build/meta.json
+        echo '  "version": "${{ steps.version.outputs.VERSION }}",' >> build/meta.json
+        echo '  "buildDate": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",' >> build/meta.json
+        echo '  "builtFrom": "github-actions",' >> build/meta.json
+        echo '  "commit": "${{ github.sha }}"' >> build/meta.json
+        echo '}' >> build/meta.json
+
+    - name: Package AMD64 release
+      run: |
+        cd build
+        zip -r ../cosmos-genieos-${{ steps.version.outputs.VERSION }}-amd64.zip \
+          cosmos cosmos-launcher static/ start.sh meta.json \
+          restic GeoLite2-Country.mmdb nebula nebula-cert Logo.png cosmos_gray.png 2>/dev/null || \
+        zip -r ../cosmos-genieos-${{ steps.version.outputs.VERSION }}-amd64.zip \
+          cosmos cosmos-launcher static/ start.sh meta.json
+
+    - name: Package ARM64 release
+      run: |
+        cd build
+        zip -r ../cosmos-genieos-${{ steps.version.outputs.VERSION }}-arm64.zip \
+          cosmos-arm64 cosmos-launcher-arm64 static/ start.sh meta.json \
+          restic-arm GeoLite2-Country.mmdb nebula-arm nebula-arm-cert Logo.png cosmos_gray.png 2>/dev/null || \
+        zip -r ../cosmos-genieos-${{ steps.version.outputs.VERSION }}-arm64.zip \
+          cosmos-arm64 cosmos-launcher-arm64 static/ start.sh meta.json
+
+    - name: Generate checksums
+      run: |
+        md5sum cosmos-genieos-*.zip > checksums.md5
+        sha256sum cosmos-genieos-*.zip > checksums.sha256
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: cosmos-binaries-${{ steps.version.outputs.VERSION }}
+        path: |
+          cosmos-genieos-*.zip
+          checksums.md5
+          checksums.sha256
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Get version from package.json
+      id: version
+      run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: cosmos-binaries-${{ steps.version.outputs.VERSION }}
+        path: ./release
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          ./release/cosmos-genieos-*.zip
+          ./release/checksums.md5
+          ./release/checksums.sha256
+        generate_release_notes: true
+        body: |
+          ## Cosmos Server for GenieOS
+
+          This release includes Proxmox LXC runtime support alongside Docker.
+
+          ### Downloads
+          - **AMD64**: `cosmos-genieos-${{ steps.version.outputs.VERSION }}-amd64.zip`
+          - **ARM64**: `cosmos-genieos-${{ steps.version.outputs.VERSION }}-arm64.zip`
+
+          ### Installation
+          ```bash
+          curl -L https://github.com/namastexlabs/Cosmos-Server-1/releases/download/${{ github.ref_name }}/cosmos-genieos-${{ steps.version.outputs.VERSION }}-amd64.zip -o cosmos.zip
+          unzip cosmos.zip -d /opt/cosmos/
+          ```
