@@ -12,16 +12,17 @@ import (
 
 type ProxmoxTestRequest struct {
 	Host          string `json:"host"`
-	Node          string `json:"node"`
 	TokenID       string `json:"tokenID"`
 	TokenSecret   string `json:"tokenSecret"`
 	SkipTLSVerify bool   `json:"skipTLSVerify"`
 }
 
 type ProxmoxTestResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
-	Version string `json:"version,omitempty"`
+	Success  bool     `json:"success"`
+	Message  string   `json:"message"`
+	Version  string   `json:"version,omitempty"`
+	Nodes    []string `json:"nodes,omitempty"`
+	Storages []string `json:"storages,omitempty"`
 }
 
 func TestProxmoxConnectionRoute(w http.ResponseWriter, req *http.Request) {
@@ -127,26 +128,75 @@ func TestProxmoxConnectionRoute(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// If node specified, verify it exists
-	if request.Node != "" {
-		nodeURL := fmt.Sprintf("%s/api2/json/nodes/%s/status", host, request.Node)
-		nodeReq, _ := http.NewRequest("GET", nodeURL, nil)
-		nodeReq.Header.Set("Authorization", fmt.Sprintf("PVEAPIToken=%s=%s", request.TokenID, request.TokenSecret))
+	// Fetch available nodes
+	nodesURL := fmt.Sprintf("%s/api2/json/nodes", host)
+	nodesReq, _ := http.NewRequest("GET", nodesURL, nil)
+	nodesReq.Header.Set("Authorization", fmt.Sprintf("PVEAPIToken=%s=%s", request.TokenID, request.TokenSecret))
 
-		nodeResp, err := client.Do(nodeReq)
-		if err != nil || nodeResp.StatusCode != 200 {
-			json.NewEncoder(w).Encode(ProxmoxTestResponse{
-				Success: false,
-				Message: fmt.Sprintf("Connected to Proxmox %s but node '%s' not found or inaccessible", versionResp.Data.Version, request.Node),
-			})
-			return
+	var nodeNames []string
+	nodesResp, err := client.Do(nodesReq)
+	if err == nil && nodesResp.StatusCode == 200 {
+		var nodesData struct {
+			Data []struct {
+				Node string `json:"node"`
+			} `json:"data"`
 		}
-		nodeResp.Body.Close()
+		if err := json.NewDecoder(nodesResp.Body).Decode(&nodesData); err == nil {
+			for _, n := range nodesData.Data {
+				nodeNames = append(nodeNames, n.Node)
+			}
+		}
+		nodesResp.Body.Close()
+	}
+
+	// Fetch storage for first node (if available)
+	var storageNames []string
+	if len(nodeNames) > 0 {
+		storageURL := fmt.Sprintf("%s/api2/json/nodes/%s/storage", host, nodeNames[0])
+		storageReq, _ := http.NewRequest("GET", storageURL, nil)
+		storageReq.Header.Set("Authorization", fmt.Sprintf("PVEAPIToken=%s=%s", request.TokenID, request.TokenSecret))
+
+		storageResp, err := client.Do(storageReq)
+		if err == nil && storageResp.StatusCode == 200 {
+			var storageData struct {
+				Data []struct {
+					Storage string `json:"storage"`
+					Content string `json:"content"`
+				} `json:"data"`
+			}
+			if err := json.NewDecoder(storageResp.Body).Decode(&storageData); err == nil {
+				for _, s := range storageData.Data {
+					// Only include storage that can hold rootdir or images
+					if s.Content == "" ||
+					   contains(s.Content, "rootdir") ||
+					   contains(s.Content, "images") ||
+					   contains(s.Content, "vztmpl") {
+						storageNames = append(storageNames, s.Storage)
+					}
+				}
+			}
+			storageResp.Body.Close()
+		}
 	}
 
 	json.NewEncoder(w).Encode(ProxmoxTestResponse{
-		Success: true,
-		Message: fmt.Sprintf("Connected to Proxmox VE %s", versionResp.Data.Version),
-		Version: versionResp.Data.Version,
+		Success:  true,
+		Message:  fmt.Sprintf("Connected to Proxmox VE %s", versionResp.Data.Version),
+		Version:  versionResp.Data.Version,
+		Nodes:    nodeNames,
+		Storages: storageNames,
 	})
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsImpl(s, substr))
+}
+
+func containsImpl(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

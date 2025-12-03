@@ -3,7 +3,7 @@ import * as Yup from 'yup';
 import { Trans, useTranslation } from 'react-i18next';
 
 // material-ui
-import { Alert, Button, Checkbox, CircularProgress, FormControl, FormHelperText, Grid, Stack, Tooltip, Typography, Card, CardContent, CardActionArea, TextField } from '@mui/material';
+import { Alert, Button, Checkbox, CircularProgress, FormControl, FormHelperText, Grid, Stack, Tooltip, Typography, Card, CardContent, CardActionArea, TextField, Select, MenuItem, InputLabel } from '@mui/material';
 
 // ant-ui icons
 import { CheckCircleOutlined, LeftOutlined, QuestionCircleFilled, QuestionCircleOutlined, RightOutlined } from '@ant-design/icons';
@@ -63,24 +63,44 @@ const NewInstall = () => {
     const [cleanInstall, setCleanInstall] = useState(true);
 
     // Runtime selection state
-    const [runtimeType, setRuntimeType] = useState('docker');
+    const [runtimeType, setRuntimeType] = useState(null); // null = not selected yet
     const [proxmoxConfig, setProxmoxConfig] = useState({
         host: '',
-        node: '',
         tokenID: '',
         tokenSecret: '',
-        storage: 'local-lvm',
-        skipTLSVerify: false
+        node: '',
+        storage: '',
+        skipTLSVerify: true
     });
     const [proxmoxTestResult, setProxmoxTestResult] = useState(null);
     const [proxmoxTesting, setProxmoxTesting] = useState(false);
+    const [availableNodes, setAvailableNodes] = useState([]);
+    const [availableStorages, setAvailableStorages] = useState([]);
 
     const testProxmoxConnection = async () => {
         setProxmoxTesting(true);
         setProxmoxTestResult(null);
+        setAvailableNodes([]);
+        setAvailableStorages([]);
         try {
-            const result = await API.testProxmoxConnection(proxmoxConfig);
+            const result = await API.testProxmoxConnection({
+                host: proxmoxConfig.host,
+                tokenID: proxmoxConfig.tokenID,
+                tokenSecret: proxmoxConfig.tokenSecret,
+                skipTLSVerify: proxmoxConfig.skipTLSVerify
+            });
             setProxmoxTestResult(result);
+            if (result.success) {
+                // Populate discovered nodes and storage
+                if (result.nodes && result.nodes.length > 0) {
+                    setAvailableNodes(result.nodes);
+                    setProxmoxConfig(prev => ({...prev, node: result.nodes[0]}));
+                }
+                if (result.storages && result.storages.length > 0) {
+                    setAvailableStorages(result.storages);
+                    setProxmoxConfig(prev => ({...prev, storage: result.storages[0]}));
+                }
+            }
         } catch (error) {
             setProxmoxTestResult({ success: false, message: error.message });
         }
@@ -192,7 +212,7 @@ const NewInstall = () => {
                                 transition: 'all 0.2s ease-in-out',
                                 '&:hover': { borderColor: '#1976d2' }
                             }}
-                            onClick={() => { setRuntimeType('docker'); setProxmoxTestResult(null); }}
+                            onClick={() => { setRuntimeType('docker'); setProxmoxTestResult(null); setAvailableNodes([]); setAvailableStorages([]); }}
                         >
                             <CardContent sx={{ textAlign: 'center', py: 3 }}>
                                 <Typography variant="h1" sx={{ fontSize: '48px', mb: 1 }}>🐋</Typography>
@@ -214,7 +234,7 @@ const NewInstall = () => {
                                 transition: 'all 0.2s ease-in-out',
                                 '&:hover': { borderColor: '#e65100' }
                             }}
-                            onClick={() => setRuntimeType('proxmox')}
+                            onClick={() => { setRuntimeType('proxmox'); }}
                         >
                             <CardContent sx={{ textAlign: 'center', py: 3 }}>
                                 <Typography variant="h1" sx={{ fontSize: '48px', mb: 1 }}>🖥️</Typography>
@@ -269,13 +289,6 @@ const NewInstall = () => {
                         />
                         <TextField
                             fullWidth
-                            label={t('newInstall.proxmoxNode') || "Node Name"}
-                            value={proxmoxConfig.node}
-                            onChange={(e) => setProxmoxConfig({...proxmoxConfig, node: e.target.value})}
-                            placeholder="pve"
-                        />
-                        <TextField
-                            fullWidth
                             label={t('newInstall.proxmoxTokenID') || "API Token ID (user@realm!tokenname)"}
                             value={proxmoxConfig.tokenID}
                             onChange={(e) => setProxmoxConfig({...proxmoxConfig, tokenID: e.target.value})}
@@ -288,13 +301,6 @@ const NewInstall = () => {
                             value={proxmoxConfig.tokenSecret}
                             onChange={(e) => setProxmoxConfig({...proxmoxConfig, tokenSecret: e.target.value})}
                             placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                        />
-                        <TextField
-                            fullWidth
-                            label={t('newInstall.proxmoxStorage') || "Storage Pool"}
-                            value={proxmoxConfig.storage}
-                            onChange={(e) => setProxmoxConfig({...proxmoxConfig, storage: e.target.value})}
-                            placeholder="local-lvm"
                         />
                         <Stack direction="row" alignItems="center" spacing={1}>
                             <Checkbox
@@ -320,14 +326,51 @@ const NewInstall = () => {
                                 {proxmoxTestResult.message}
                             </Alert>
                         )}
+
+                        {/* Show node/storage selection after successful connection */}
+                        {proxmoxTestResult && proxmoxTestResult.success && availableNodes.length > 0 && (
+                            <Stack spacing={2}>
+                                <FormControl fullWidth>
+                                    <InputLabel>{t('newInstall.proxmoxNode') || "Node"}</InputLabel>
+                                    <Select
+                                        value={proxmoxConfig.node}
+                                        label={t('newInstall.proxmoxNode') || "Node"}
+                                        onChange={(e) => setProxmoxConfig({...proxmoxConfig, node: e.target.value})}
+                                    >
+                                        {availableNodes.map((node) => (
+                                            <MenuItem key={node} value={node}>{node}</MenuItem>
+                                        ))}
+                                    </Select>
+                                </FormControl>
+
+                                {availableStorages.length > 0 && (
+                                    <FormControl fullWidth>
+                                        <InputLabel>{t('newInstall.proxmoxStorage') || "Storage Pool"}</InputLabel>
+                                        <Select
+                                            value={proxmoxConfig.storage}
+                                            label={t('newInstall.proxmoxStorage') || "Storage Pool"}
+                                            onChange={(e) => setProxmoxConfig({...proxmoxConfig, storage: e.target.value})}
+                                        >
+                                            {availableStorages.map((storage) => (
+                                                <MenuItem key={storage} value={storage}>{storage}</MenuItem>
+                                            ))}
+                                        </Select>
+                                    </FormControl>
+                                )}
+                            </Stack>
+                        )}
                     </Stack>
                 )}
             </Stack>,
             nextButtonLabel: () => {
+                if (!runtimeType) {
+                    return ''; // No runtime selected yet
+                }
                 if (runtimeType === 'docker') {
                     return status && status.docker ? t('global.next') : t('newInstall.skipAction');
                 } else {
-                    return proxmoxTestResult && proxmoxTestResult.success ? t('global.next') : '';
+                    // Proxmox: require successful test AND node selected
+                    return proxmoxTestResult && proxmoxTestResult.success && proxmoxConfig.node ? t('global.next') : '';
                 }
             }
         },
