@@ -63,6 +63,17 @@ jobs:
         git tag v${{ steps.version.outputs.NEXT }}
         git push origin v${{ steps.version.outputs.NEXT }}
 
+    - name: Trigger Build workflow
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # Wait for tag to be recognized
+        sleep 5
+        # Trigger build-release workflow with version override
+        gh workflow run build-release.yml \
+          --ref v${{ steps.version.outputs.NEXT }} \
+          -f version_override=${{ steps.version.outputs.NEXT }}
+
     - name: Summary
       run: |
         echo "### Release Created" >> $GITHUB_STEP_SUMMARY
