@@ -14,7 +14,16 @@ function useClientInfos() {
   };
 
   let clientInfos = null;
-  
+
+  // Check if cookie exists before parsing
+  if (!cookies['client-infos']) {
+    return {
+      nickname: "",
+      role: "2",
+      userRole: "2"
+    };
+  }
+
   try {
     // Try to parse the cookie into a JavaScript object
     clientInfos = cookies['client-infos'].split(',');
