@@ -42,6 +42,9 @@ tar -xzf /tmp/cosmos.tar.gz -C "${INSTALL_DIR}/bin/"
 # Ensure correct permissions
 chmod +x "${INSTALL_DIR}/bin/cosmos" "${INSTALL_DIR}/bin/cosmos-launcher" || true
 
+# Allow cosmos binary to bind to privileged ports (80, 443) as non-root user
+setcap 'cap_net_bind_service=+ep' "${INSTALL_DIR}/bin/cosmos"
+
 # Update meta.json with deployment info
 cat > "${INSTALL_DIR}/meta.json" << EOF
 {
